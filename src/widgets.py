@@ -11,18 +11,102 @@ class MainWindow(urwid.Filler):
         self.outport = sq.outport("out")
         self.sesh.register_outport(self.outport)
 
+        self.seqWidgets = []
+
         self.addSequence(16)
         self.playing = False
+        self.stopNoti = False
+
+        self.sesh.set_bpm(90)
+
+    def setLoop(self, loop):
+        self.loop = loop
 
     def keypress(self, size, key):
         if key==' ':
-            self.playing = not self.playing
             if self.playing:
-                self.sesh.start()
+                self.stop()
             else:
-                self.sesh.stop()
+                self.start()
         elif key in ('n', 'N'):
             self.addSequence(16)
+        else:
+            return super().keypress(size, key)
+
+    def checkNotifications(self, loop, data):
+        for seqWidget in self.seqWidgets:
+            seqWidget.checkNotifications()
+        if self.stopNoti:
+            self.stopNoti = False
+            return
+        self.loop.set_alarm_in(0.1, self.checkNotifications)
+
+    def start(self):
+        self.sesh.start()
+        self.loop.set_alarm_in(0, self.checkNotifications)
+        self.playing = True
+
+    def stop(self):
+        self.sesh.stop()
+        self.stopNoti = True
+        self.playing = False
+
+    def addSequence(self, n):
+        seq = sq.sequence(n)
+        seq.set_outport(self.outport)
+        self.sesh.add_sequence(seq)
+        seqWidget = SequenceWidget(seq)
+        self.pile.contents.append((seqWidget, ('pack', None)))
+        self.seqWidgets.append(seqWidget)
+
+class SequenceWidget(urwid.Columns):
+
+    def __init__(self, seq):
+        self.seq = seq
+        self.seq.set_notifications(True)
+        self.triggerWidgets = []
+        for i in range(self.seq.get_nsteps()):
+            self.triggerWidgets.append(TriggerWidget(i, self.seq))
+        super().__init__(self.triggerWidgets)
+
+        self.current = self.triggerWidgets[0]
+
+    def keypress(self, size, key):
+        return super().keypress(size, key)
+
+    def checkNotifications(self):
+        new, ph = self.seq.read_new_playhead()
+        if new:
+            self.current.setPlayhead(False)
+            self.current = self.triggerWidgets[ph]
+            self.current.setPlayhead(True)
+
+class TriggerWidget(urwid.Edit):
+
+    """
+    Just using Edit for now because it's selectable (Text isn't)
+    """
+
+    def __init__(self, index, seq):
+        super().__init__('__', align='center')
+        self.set = False
+        self.index = index
+        self.seq = seq
+        self.trig = sq.trigger()
+
+    def keypress(self, size, key):
+        if key in ('t', 'T'):
+            self.trig.type = 0 if self.trig.type else 1 # toggle
+            self.seq.set_trig(self.index, self.trig)
+            self.show()
+        elif key=='J':
+            self.trig.note_value -= 1
+            self.seq.set_trig(self.index, self.trig)
+            self.show()
+        elif key=='K':
+            self.trig.note_value += 1
+            self.seq.set_trig(self.index, self.trig)
+            self.show()
         elif key=='h':
             return super().keypress(size, 'left')
         elif key=='j':
@@ -32,49 +116,17 @@ class MainWindow(urwid.Filler):
         elif key=='l':
             return super().keypress(size, 'right')
         else:
-            return super().keypress(size, key)
-
-    def addSequence(self, n):
-        seq = sq.sequence(n)
-        seq.set_outport(self.outport)
-        self.sesh.add_sequence(seq)
-        self.pile.contents.append((SequenceWidget(seq), ('pack', None)))
-
-class SequenceWidget(urwid.Columns):
-
-    def __init__(self, seq):
-        self.seq = seq
-        self.triggerWidgets = []
-        for i in range(self.seq.get_nsteps()):
-            self.triggerWidgets.append(TriggerWidget(i, self.seq))
-        super().__init__(self.triggerWidgets)
-
-    def keypress(self, size, key):
-        return super().keypress(size, key)
-
-class TriggerWidget(urwid.Edit):
-
-    """
-    Just using Edit for now because it's selectable (Text isn't)
-    """
-
-    def __init__(self, index, seq):
-        super().__init__('_', align='center')
-        self.set = False
-        self.index = index
-        self.seq = seq
-        self.trig = sq.trigger()
-
-    def keypress(self, size, key):
-        if key in ('t', 'T'):
-            self.set = not self.set
-            if self.set:
-                self.set_caption('X')
-                self.trig.set_type(1)
-            else:
-                self.set_caption('_')
-                self.trig.set_type(0)
-            self.seq.set_trig(self.index, self.trig)
-        else:
             return key  # don't call base method
+
+    def show(self):
+        if self.trig.type==1:
+            self.set_caption(str(self.trig.note_value))
+        else:
+            self.set_caption('__')
+            
+    def setPlayhead(self, enable):
+        if enable:
+            self.set_caption('**')
+        else:
+            self.show()
 
